@@ -6,48 +6,64 @@ import time
 import httpx
 
 
-def get_openrouter_models():
+DEFAULT_API_BASE = "https://openrouter.ai/api/v1"
+
+def get_api_base():
+    config_path = llm.user_dir() / "litellm.yaml"
+    if not config_path.exists():
+        return DEFAULT_API_BASE
+    
+    try:
+        import yaml
+        with open(config_path) as f:
+            config = yaml.safe_load(f)
+            return config.get("api_base", DEFAULT_API_BASE)
+    except Exception:
+        return DEFAULT_API_BASE
+
+def get_litellm_models():
+    api_base = get_api_base().rstrip('/')
     return fetch_cached_json(
-        url="https://openrouter.ai/api/v1/models",
-        path=llm.user_dir() / "openrouter_models.json",
+        url=f"{api_base}/models",
+        path=llm.user_dir() / "litellm_models.json",
         cache_timeout=3600,
     )["data"]
 
 
-class OpenRouterChat(Chat):
-    needs_key = "openrouter"
-    key_env_var = "OPENROUTER_KEY"
+class LiteLLMChat(Chat):
+    needs_key = "litellm"
+    key_env_var = "LITELLM_KEY"
 
     def __str__(self):
-        return "OpenRouter: {}".format(self.model_id)
+        return "LiteLLM: {}".format(self.model_id)
 
 
-class OpenRouterAsyncChat(AsyncChat):
-    needs_key = "openrouter"
-    key_env_var = "OPENROUTER_KEY"
+class LiteLLMAsyncChat(AsyncChat):
+    needs_key = "litellm"
+    key_env_var = "LITELLM_KEY"
 
     def __str__(self):
-        return "OpenRouter: {}".format(self.model_id)
+        return "LiteLLM: {}".format(self.model_id)
 
 
 @llm.hookimpl
 def register_models(register):
-    # Only do this if the openrouter key is set
-    key = llm.get_key("", "openrouter", "LLM_OPENROUTER_KEY")
+    # Only do this if the litellm key is set
+    key = llm.get_key("", "litellm", "LLM_LITELLM_KEY")
     if not key:
         return
-    for model_definition in get_openrouter_models():
+    for model_definition in get_litellm_models():
         supports_images = get_supports_images(model_definition)
         kwargs = dict(
-            model_id="openrouter/{}".format(model_definition["id"]),
+            model_id="litellm/{}".format(model_definition["id"]),
             model_name=model_definition["id"],
             vision=supports_images,
-            api_base="https://openrouter.ai/api/v1",
+            api_base=get_api_base(),
             headers={"HTTP-Referer": "https://llm.datasette.io/", "X-Title": "LLM"},
         )
         register(
-            OpenRouterChat(**kwargs),
-            OpenRouterAsyncChat(**kwargs),
+            LiteLLMChat(**kwargs),
+            LiteLLMAsyncChat(**kwargs),
         )
 
 
@@ -65,14 +81,16 @@ def fetch_cached_json(url, path, cache_timeout):
         # Get the file's modification time
         mod_time = path.stat().st_mtime
         # Check if it's more than the cache_timeout old
-        if time.time() - mod_time < cache_timeout:
+        if False and time.time() - mod_time < cache_timeout:
             # If not, load the file
             with open(path, "r") as file:
                 return json.load(file)
 
     # Try to download the data
     try:
-        response = httpx.get(url, follow_redirects=True)
+        key = llm.get_key("", "litellm", "LLM_LITELLM_KEY")
+        headers = {"Authorization": f"Bearer {key}"} if key else {}
+        response = httpx.get(url, headers=headers, follow_redirects=True)
         response.raise_for_status()  # This will raise an HTTPError if the request fails
 
         # If successful, write to the file
